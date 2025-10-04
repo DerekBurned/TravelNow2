@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "224648004941",
+    "project_id": "travelnow-803fe",
+    "storage_bucket": "travelnow-803fe.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:224648004941:android:c62efa63983b98af02a304",
+        "android_client_info": {
+          "package_name": "com.example.travelnow"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCFqvzEroI-HfrRHzQ_jMSCttF038yaTQA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
