@@ -83,18 +83,14 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
             binding.progressBar.visibility = View.GONE
         }
 
-        // Initializing Location Services
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
 
-        // Initializing Places API
         initializePlaces()
 
-        // Setup Map
         val mapFragment = supportFragmentManager
             .findFragmentById(R.id.map) as? SupportMapFragment
         mapFragment?.getMapAsync(this)
 
-        // Setup UI
         setupUI()
         setupObservers()
     }
@@ -119,7 +115,6 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
 
     private fun setupUI() {
         with(binding) {
-            // Setup AutoComplete Search
             val adapter = ArrayAdapter<String>(
                 this@MapsActivity,
                 android.R.layout.simple_dropdown_item_1line
@@ -127,7 +122,6 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
             autoCompleteSearch.setAdapter(adapter)
             autoCompleteSearch.threshold = 1
 
-            // Text change listener for autocomplete
             autoCompleteSearch.addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
 
@@ -143,7 +137,6 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 override fun afterTextChanged(s: Editable?) {}
             })
 
-            // Item click listener
             autoCompleteSearch.setOnItemClickListener { _, _, position, _ ->
                 predictions.getOrNull(position)?.let { prediction ->
                     getPlaceDetails(prediction)
@@ -151,7 +144,6 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 autoCompleteSearch.clearFocus()
             }
 
-            // Search action button
             autoCompleteSearch.setOnEditorActionListener { v, actionId, _ ->
                 if (actionId == EditorInfo.IME_ACTION_SEARCH) {
                     val query = v.text.toString()
@@ -163,13 +155,11 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 } else false
             }
 
-            // Clear search button
             clearSearch.setOnClickListener {
                 autoCompleteSearch.text.clear()
                 clearSearch.visibility = View.GONE
             }
 
-            // FAB buttons
             fabMyLocation.setOnClickListener { getCurrentLocation() }
             fabMapType.setOnClickListener { showMapTypeDialog() }
             fabClearMarkers.setOnClickListener { clearAllSafetyCircles() }
@@ -185,17 +175,14 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     private fun setupObservers() {
-        // Observe reports
         viewModel.reports.observe(this) { reports ->
             updateMapWithReports(reports)
         }
 
-        // Observe loading state
         viewModel.loading.observe(this) { isLoading ->
             binding.progressBar.visibility = if (isLoading) View.VISIBLE else View.GONE
         }
 
-        // Observe errors
         viewModel.error.observe(this) { error ->
             error?.let {
                 Toast.makeText(this, "Error: $it", Toast.LENGTH_LONG).show()
@@ -203,7 +190,6 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
             }
         }
 
-        // Observe submit success
         viewModel.submitSuccess.observe(this) { success ->
             if (success) {
                 Toast.makeText(this, "Report submitted successfully!", Toast.LENGTH_SHORT).show()
@@ -215,7 +201,6 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
     override fun onMapReady(googleMap: GoogleMap) {
         map = googleMap
 
-        // Configure map settings
         map.mapType = GoogleMap.MAP_TYPE_NORMAL
         map.uiSettings.apply {
             isZoomControlsEnabled = false
@@ -230,13 +215,11 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
 
         checkLocationPermission()
 
-        // Long press to create safety report
         map.setOnMapLongClickListener { latLng ->
             showSafetyReportDialog(latLng)
             Log.d("Long Press", "Map was long pressed")
         }
 
-        // Click on map to select location
         map.setOnMapClickListener { latLng ->
             currentMarker?.remove()
             currentMarker = map.addMarker(
@@ -250,12 +233,10 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
             getAddressFromLocation(latLng)
         }
 
-        // Camera idle listener - load reports when camera stops
         map.setOnCameraIdleListener {
             val center = map.cameraPosition.target
             val zoom = map.cameraPosition.zoom
 
-            // Only load reports if zoomed in enough
             if (zoom >= 10f) {
                 val radiusKm = when {
                     zoom >= 15f -> 5.0
@@ -314,7 +295,6 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
 
         binding.progressBar.visibility = View.VISIBLE
 
-        // Cancel previous request
         locationCancellationToken?.cancel()
         locationCancellationToken = CancellationTokenSource()
 
@@ -329,7 +309,6 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 val currentLatLng = LatLng(location.latitude, location.longitude)
                 map.animateCamera(CameraUpdateFactory.newLatLngZoom(currentLatLng, 14f))
 
-                // Load nearby reports
                 viewModel.loadNearbyReports(location.latitude, location.longitude)
                 Toast.makeText(this, "Location found!", Toast.LENGTH_SHORT).show()
             } else {
@@ -402,7 +381,6 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 }
             }
 
-            // Regenerate session token
             sessionToken = AutocompleteSessionToken.newInstance()
             predictions.clear()
             binding.autoCompleteSearch.text.clear()
@@ -476,7 +454,6 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
             .setTitle("Report Safety Status")
             .create()
 
-        // Get area name
         var areaName = "Unknown Location"
         getAddressFromLocationForReport(latLng) { address ->
             areaName = address
@@ -527,11 +504,9 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     private fun updateMapWithReports(reports: List<SafetyReport>) {
-        // Clear existing circles
         safetyCircles.forEach { it.remove() }
         safetyCircles.clear()
 
-        // Add new circles
         reports.forEach { report ->
             val latLng = LatLng(report.latitude, report.longitude)
             val safetyLevel = report.getSafetyLevelEnum()
@@ -548,7 +523,6 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
 
             safetyCircles.add(circle)
 
-            // Add a small marker for the report
             map.addMarker(
                 MarkerOptions()
                     .position(latLng)
@@ -583,8 +557,7 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 recyclerViewReports.visibility = View.VISIBLE
                 tvNoReports.visibility = View.GONE
 
-                // Setup RecyclerView adapter here
-                // You'll need to create SafetyReportAdapter
+
             }
 
             btnClose.setOnClickListener {

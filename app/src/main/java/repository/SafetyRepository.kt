@@ -43,7 +43,6 @@ class SafetyRepository {
         return try {
             Log.d("SafetyRepository", "Attempting to submit report...")
 
-            // Ensure authentication first
             if (!ensureAuthenticated()) {
                 Log.e("SafetyRepository", "Authentication failed")
                 return Result.failure(Exception("Authentication failed. Please try again."))
@@ -57,7 +56,6 @@ class SafetyRepository {
 
             Log.d("SafetyRepository", "Authenticated user ID: $userId")
 
-            // Generate geohash for location-based queries
             val geohash = GeoUtils.encode(latitude, longitude, 7)
             Log.d("SafetyRepository", "Generated geohash: $geohash")
 
@@ -93,13 +91,13 @@ class SafetyRepository {
         return try {
             Log.d("SafetyRepository", "Fetching nearby reports for lat=$latitude, lon=$longitude, radius=$radiusKm km")
 
-            // Get geohash bounds for the area
+
             val bounds = GeoUtils.getGeohashBounds(latitude, longitude, radiusKm)
             Log.d("SafetyRepository", "Geohash bounds: ${bounds.first} to ${bounds.second}")
 
             val reports = mutableListOf<SafetyReport>()
 
-            // Query Firestore with geohash range
+
             val snapshot = reportsCollection
                 .whereGreaterThanOrEqualTo("geohash", bounds.first)
                 .whereLessThanOrEqualTo("geohash", bounds.second)
@@ -114,7 +112,6 @@ class SafetyRepository {
             for (document in snapshot.documents) {
                 val report = document.toObject(SafetyReport::class.java)
                 report?.let {
-                    // Filter by actual distance to ensure accuracy
                     val distance = GeoUtils.calculateDistance(
                         latitude, longitude,
                         it.latitude, it.longitude
@@ -180,7 +177,6 @@ class SafetyRepository {
         return try {
             Log.d("SafetyRepository", "Attempting to delete report $reportId")
 
-            // Ensure authentication first
             if (!ensureAuthenticated()) {
                 return Result.failure(Exception("Not authenticated"))
             }

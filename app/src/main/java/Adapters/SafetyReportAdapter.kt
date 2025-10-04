@@ -29,30 +29,22 @@ class SafetyReportAdapter(
         fun bind(report: SafetyReport) {
             val safetyLevel = report.getSafetyLevelEnum()
 
-            // Set safety indicator color
             safetyIndicator.setBackgroundColor(safetyLevel.color)
 
-            // Set safety level text and color
             tvSafetyLevel.text = safetyLevel.displayName
             tvSafetyLevel.setTextColor(safetyLevel.color)
 
-            // Set timestamp
             tvTimestamp.text = report.getFormattedDate()
 
-            // Set area name
             tvAreaName.text = report.areaName
 
-            // Set comment
             tvComment.text = report.comment
 
-            // Set user name
             tvUserName.text = report.userName
 
-            // Set vote count (upvotes - downvotes)
             val voteCount = report.upvotes - report.downvotes
             tvVoteCount.text = voteCount.toString()
 
-            // Click listeners
             btnUpvote.setOnClickListener { onUpvoteClick(report) }
             btnDownvote.setOnClickListener { onDownvoteClick(report) }
             itemView.setOnClickListener { onItemClick(report) }
@@ -71,13 +63,10 @@ class SafetyReportAdapter(
 
     override fun getItemCount(): Int = reports.size
 
-    /**
-     * Update the list of reports and refresh the RecyclerView
-     */
+
     fun updateReports(newReports: List<SafetyReport>) {
         reports = newReports
         notifyDataSetChanged()
     }
 }
 
-// Location: app/src/main/java/com/example/travelnow/SafetyReportAdapter.kt

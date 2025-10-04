@@ -95,7 +95,7 @@ class SafetyViewModel : ViewModel() {
                 .onSuccess {
                     // Refresh the list
                     _reports.value?.let { currentReports ->
-                        _reports.value = currentReports // Trigger observer
+                        _reports.value = currentReports
                     }
                 }
         }

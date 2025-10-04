@@ -6,9 +6,7 @@ object GeoUtils {
     private const val EARTH_RADIUS_KM = 6371.0
     private const val BASE32 = "0123456789bcdefghjkmnpqrstuvwxyz"
 
-    /**
-     * Calculate distance between two points in kilometers using Haversine formula
-     */
+
     fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
         val dLat = Math.toRadians(lat2 - lat1)
         val dLon = Math.toRadians(lon2 - lon1)
@@ -21,13 +19,7 @@ object GeoUtils {
         return EARTH_RADIUS_KM * c
     }
 
-    /**
-     * Simple geohash encoding for location-based queries
-     * @param latitude The latitude coordinate
-     * @param longitude The longitude coordinate
-     * @param precision The precision level (default 7)
-     * @return The geohash string
-     */
+
     fun encode(latitude: Double, longitude: Double, precision: Int = 7): String {
         var latMin = -90.0
         var latMax = 90.0
@@ -72,13 +64,7 @@ object GeoUtils {
         return geohash.toString()
     }
 
-    /**
-     * Get geohash bounds for querying nearby locations
-     * @param latitude Center latitude
-     * @param longitude Center longitude
-     * @param radiusKm Search radius in kilometers
-     * @return Pair of lower and upper geohash bounds
-     */
+
     fun getGeohashBounds(latitude: Double, longitude: Double, radiusKm: Double): Pair<String, String> {
         // Approximate: use smaller precision for larger radius
         val precision = when {
@@ -91,7 +77,6 @@ object GeoUtils {
         val centerHash = encode(latitude, longitude, precision)
         val lower = centerHash.substring(0, precision)
 
-        // Calculate upper bound
         val lastCharIndex = BASE32.indexOf(lower.last())
         val upper = if (lastCharIndex < BASE32.length - 1) {
             lower.substring(0, precision - 1) + BASE32[lastCharIndex + 1]
@@ -103,4 +88,3 @@ object GeoUtils {
     }
 }
 
-// Location: app/src/main/java/com/example/travelnow/utils/GeoUtils.kt
