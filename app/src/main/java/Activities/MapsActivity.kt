@@ -61,10 +61,12 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
     private val predictions = mutableListOf<AutocompletePrediction>()
     private var locationCancellationToken: CancellationTokenSource? = null
 
+    // Store pending reports until map is ready
+    private var pendingReports: List<SafetyReport>? = null
+
     private val viewModel by lazy {
         (application as MyApplication).safetyViewModel
     }
-
 
     private var currentSortOptions = SortOptions.DANGER_LEVEL_DESC
 
@@ -168,8 +170,16 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
             fabMyLocation.setOnClickListener { getCurrentLocation() }
             fabMapType.setOnClickListener { showMapTypeDialog() }
             fabClearMarkers.setOnClickListener { clearAllSafetyCircles() }
-            fabZoomIn.setOnClickListener { map.animateCamera(CameraUpdateFactory.zoomIn()) }
-            fabZoomOut.setOnClickListener { map.animateCamera(CameraUpdateFactory.zoomOut()) }
+            fabZoomIn.setOnClickListener {
+                if (::map.isInitialized) {
+                    map.animateCamera(CameraUpdateFactory.zoomIn())
+                }
+            }
+            fabZoomOut.setOnClickListener {
+                if (::map.isInitialized) {
+                    map.animateCamera(CameraUpdateFactory.zoomOut())
+                }
+            }
             fabShowReports.setOnClickListener { showReportsBottomSheet() }
             fabRefresh.setOnClickListener { refreshReports() }
         }
@@ -177,7 +187,14 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
 
     private fun setupObservers() {
         viewModel.reports.observe(this) { reports ->
-            updateMapWithReportsSmartly(reports)
+            if (::map.isInitialized) {
+                updateMapWithReportsSmartly(reports)
+                pendingReports = null
+            } else {
+                // Store reports to apply when map is ready
+                pendingReports = reports
+                Log.d(TAG, "Map not ready, storing ${reports.size} pending reports")
+            }
         }
 
         viewModel.loading.observe(this) { isLoading ->
@@ -197,6 +214,7 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 viewModel.resetSubmitSuccess()
             }
         }
+
         viewModel.focusedReportId.observe(this) { reportId ->
             focusedReportId = reportId
             if (::map.isInitialized) {
@@ -279,6 +297,23 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 viewModel.loadNearbyReports(center.latitude, center.longitude, radiusKm)
             }
         }
+
+        // Apply pending reports if any
+        pendingReports?.let { reports ->
+            Log.d(TAG, "Map ready, applying ${reports.size} pending reports")
+            updateMapWithReportsSmartly(reports)
+            pendingReports = null
+        }
+
+        // Apply pending map type if any
+        viewModel.mapType.value?.let { type ->
+            map.mapType = type
+        }
+
+        // Apply pending center location if any
+        viewModel.centerLocation.value?.let { location ->
+            map.animateCamera(CameraUpdateFactory.newLatLngZoom(location, 14f))
+        }
     }
 
     private val requestPermissionLauncher = registerForActivityResult(
@@ -313,7 +348,9 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 Manifest.permission.ACCESS_FINE_LOCATION
             ) == PackageManager.PERMISSION_GRANTED
         ) {
-            map.isMyLocationEnabled = true
+            if (::map.isInitialized) {
+                map.isMyLocationEnabled = true
+            }
         }
     }
 
@@ -340,7 +377,10 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 currentLocation = location
                 val currentLatLng = LatLng(location.latitude, location.longitude)
                 centerLocation = currentLatLng
-                map.animateCamera(CameraUpdateFactory.newLatLngZoom(currentLatLng, 14f))
+
+                if (::map.isInitialized) {
+                    map.animateCamera(CameraUpdateFactory.newLatLngZoom(currentLatLng, 14f))
+                }
 
                 viewModel.loadNearbyReports(location.latitude, location.longitude, 100.0)
                 viewModel.setCenterLocation(currentLatLng)
@@ -471,6 +511,8 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     private fun updateMarkerAndCamera(latLng: LatLng, title: String, snippet: String) {
+        if (!::map.isInitialized) return
+
         currentMarker?.remove()
         currentMarker = map.addMarker(
             MarkerOptions()
@@ -482,6 +524,11 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     private fun updateMapWithReportsSmartly(reports: List<SafetyReport>) {
+        if (!::map.isInitialized) {
+            Log.w(TAG, "Map not initialized, cannot update reports")
+            return
+        }
+
         val newReportIds = reports.map { it.id }.toSet()
         val currentReportIds = reportMarkers.keys.toSet()
 
@@ -505,6 +552,11 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     private fun addReportToMap(report: SafetyReport) {
+        if (!::map.isInitialized) {
+            Log.w(TAG, "Attempted to add report to map before map was initialized")
+            return
+        }
+
         val latLng = LatLng(report.latitude, report.longitude)
         val safetyLevel = report.getSafetyLevelEnum()
 
@@ -541,6 +593,8 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     private fun focusOnReport(reportId: String) {
+        if (!::map.isInitialized) return
+
         if (focusedReportId == reportId) {
             focusedReportId = null
         } else {
@@ -775,6 +829,8 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     private fun showMapTypeDialog() {
+        if (!::map.isInitialized) return
+
         val options = arrayOf("Normal", "Satellite", "Terrain", "Hybrid")
         AlertDialog.Builder(this)
             .setTitle("Select Map Type")
@@ -803,6 +859,11 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     private fun refreshReports() {
+        if (!::map.isInitialized) {
+            Toast.makeText(this, "Map not ready", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         val center = centerLocation ?: map.cameraPosition.target
         viewModel.loadNearbyReports(center.latitude, center.longitude, 100.0)
         viewModel.forceRefresh(center.latitude, center.longitude)
