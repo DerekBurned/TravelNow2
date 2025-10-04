@@ -2,16 +2,18 @@ package com.example.travelnow
 
 import android.view.LayoutInflater
 import android.view.ViewGroup
+import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
 import com.example.travelnow.databinding.ItemSafetyReportBinding
 import models.SafetyReport
 
 class SafetyReportAdapter(
-    private var reports: List<SafetyReport>,
     private val onUpvoteClick: (SafetyReport) -> Unit,
     private val onDownvoteClick: (SafetyReport) -> Unit,
     private val onItemClick: (SafetyReport) -> Unit
 ) : RecyclerView.Adapter<SafetyReportAdapter.ReportViewHolder>() {
+
+    private var reports = listOf<SafetyReport>()
 
     inner class ReportViewHolder(private val binding: ItemSafetyReportBinding) :
         RecyclerView.ViewHolder(binding.root) {
@@ -19,26 +21,17 @@ class SafetyReportAdapter(
         fun bind(report: SafetyReport) {
             val safetyLevel = report.getSafetyLevelEnum()
 
-            // Set indicator color
             binding.safetyIndicator.setBackgroundColor(safetyLevel.color)
-
-            // Set safety level text and color
             binding.tvSafetyLevel.text = safetyLevel.displayName
             binding.tvSafetyLevel.setTextColor(safetyLevel.color)
-
-            // Set timestamp
             binding.tvTimestamp.text = report.getFormattedDate()
-
-            // Set area name, comment, and user name
             binding.tvAreaName.text = report.areaName
             binding.tvComment.text = report.comment
             binding.tvUserName.text = report.userName
 
-            // Set vote count
             val voteCount = report.upvotes - report.downvotes
             binding.tvVoteCount.text = voteCount.toString()
 
-            // Click listeners
             binding.btnUpvote.setOnClickListener { onUpvoteClick(report) }
             binding.btnDownvote.setOnClickListener { onDownvoteClick(report) }
             binding.root.setOnClickListener { onItemClick(report) }
@@ -61,7 +54,34 @@ class SafetyReportAdapter(
     override fun getItemCount(): Int = reports.size
 
     fun updateReports(newReports: List<SafetyReport>) {
+        val diffCallback = ReportDiffCallback(reports, newReports)
+        val diffResult = DiffUtil.calculateDiff(diffCallback)
         reports = newReports
-        notifyDataSetChanged()
+        diffResult.dispatchUpdatesTo(this)
+    }
+
+    private class ReportDiffCallback(
+        private val oldList: List<SafetyReport>,
+        private val newList: List<SafetyReport>
+    ) : DiffUtil.Callback() {
+
+        override fun getOldListSize(): Int = oldList.size
+
+        override fun getNewListSize(): Int = newList.size
+
+        override fun areItemsTheSame(oldPos: Int, newPos: Int): Boolean {
+            return oldList[oldPos].id == newList[newPos].id
+        }
+
+        override fun areContentsTheSame(oldPos: Int, newPos: Int): Boolean {
+            val old = oldList[oldPos]
+            val new = newList[newPos]
+            return old.latitude == new.latitude &&
+                    old.longitude == new.longitude &&
+                    old.safetyLevel == new.safetyLevel &&
+                    old.comment == new.comment &&
+                    old.upvotes == new.upvotes &&
+                    old.downvotes == new.downvotes
+        }
     }
 }

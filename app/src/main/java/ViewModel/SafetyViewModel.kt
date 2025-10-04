@@ -1,11 +1,10 @@
 package ViewModel
 
-
-
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.android.gms.maps.model.LatLng
 import models.SafetyReport
 import kotlinx.coroutines.launch
 import repository.SafetyRepository
@@ -25,6 +24,18 @@ class SafetyViewModel : ViewModel() {
     private val _submitSuccess = MutableLiveData<Boolean>()
     val submitSuccess: LiveData<Boolean> = _submitSuccess
 
+    // NEW: UI State Management for persistence
+    private val _focusedReportId = MutableLiveData<String?>()
+    val focusedReportId: LiveData<String?> = _focusedReportId
+
+    private val _centerLocation = MutableLiveData<LatLng?>()
+    val centerLocation: LiveData<LatLng?> = _centerLocation
+
+    private val _mapType = MutableLiveData<Int>()
+    val mapType: LiveData<Int> = _mapType
+
+    // Track current report IDs to avoid unnecessary updates
+    private var currentReportIds = emptySet<String>()
 
     fun loadNearbyReports(latitude: Double, longitude: Double, radiusKm: Double = 50.0) {
         viewModelScope.launch {
@@ -32,8 +43,9 @@ class SafetyViewModel : ViewModel() {
             _error.value = null
 
             repository.getNearbyReports(latitude, longitude, radiusKm)
-                .onSuccess { reports ->
-                    _reports.value = reports
+                .onSuccess { newReports ->
+                    _reports.value = newReports
+                    currentReportIds = newReports.map { it.id }.toSet()
                     _loading.value = false
                 }
                 .onFailure { exception ->
@@ -42,7 +54,6 @@ class SafetyViewModel : ViewModel() {
                 }
         }
     }
-
 
     fun loadRecentReports() {
         viewModelScope.launch {
@@ -52,6 +63,7 @@ class SafetyViewModel : ViewModel() {
             repository.getRecentReports()
                 .onSuccess { reports ->
                     _reports.value = reports
+                    currentReportIds = reports.map { it.id }.toSet()
                     _loading.value = false
                 }
                 .onFailure { exception ->
@@ -60,7 +72,6 @@ class SafetyViewModel : ViewModel() {
                 }
         }
     }
-
 
     fun submitReport(
         latitude: Double,
@@ -88,7 +99,6 @@ class SafetyViewModel : ViewModel() {
         }
     }
 
-
     fun voteOnReport(reportId: String, isUpvote: Boolean) {
         viewModelScope.launch {
             repository.voteOnReport(reportId, isUpvote)
@@ -101,25 +111,41 @@ class SafetyViewModel : ViewModel() {
         }
     }
 
-
     fun deleteReport(reportId: String) {
         viewModelScope.launch {
             repository.deleteReport(reportId)
                 .onSuccess {
                     // Remove from list
                     _reports.value = _reports.value?.filter { it.id != reportId }
+                    currentReportIds = _reports.value?.map { it.id }?.toSet() ?: emptySet()
                 }
         }
     }
 
+    // NEW: UI State Management Methods
+    fun setFocusedReport(reportId: String?) {
+        _focusedReportId.value = reportId
+    }
+
+    fun setCenterLocation(latLng: LatLng?) {
+        _centerLocation.value = latLng
+    }
+
+    fun setMapType(type: Int) {
+        _mapType.value = type
+    }
 
     fun clearError() {
         _error.value = null
     }
 
-
     fun resetSubmitSuccess() {
         _submitSuccess.value = false
     }
-}
 
+    // NEW: Force refresh - clears cache and reloads
+    fun forceRefresh(latitude: Double, longitude: Double, radiusKm: Double = 50.0) {
+        currentReportIds = emptySet()
+        loadNearbyReports(latitude, longitude, radiusKm)
+    }
+}
