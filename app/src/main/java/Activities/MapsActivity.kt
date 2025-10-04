@@ -9,7 +9,6 @@ import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.Log
-import android.view.LayoutInflater
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.ArrayAdapter
@@ -18,9 +17,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.travelnow.databinding.ActivityMapsBinding
 import com.example.travelnow.databinding.DialogSafetyReportBinding
 import com.example.travelnow.databinding.BottomSheetReportsBinding
+import com.example.travelnow.models.SortOptions
 import models.SafetyLevel
 import models.SafetyReport
 import com.google.android.gms.location.FusedLocationProviderClient
@@ -50,14 +51,24 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
 
     private var currentMarker: Marker? = null
     private var currentLocation: Location? = null
-    private val safetyCircles = mutableListOf<Circle>()
+    private var centerLocation: LatLng? = null
+
+    private val reportMarkers = mutableMapOf<String, Marker>()
+    private val reportCircles = mutableMapOf<String, Circle>()
+    private var focusedReportId: String? = null
+
     private var sessionToken: AutocompleteSessionToken? = null
     private val predictions = mutableListOf<AutocompletePrediction>()
     private var locationCancellationToken: CancellationTokenSource? = null
 
+    // Store pending reports until map is ready
+    private var pendingReports: List<SafetyReport>? = null
+
     private val viewModel by lazy {
         (application as MyApplication).safetyViewModel
     }
+
+    private var currentSortOptions = SortOptions.DANGER_LEVEL_DESC
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -65,7 +76,6 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
         setContentView(binding.root)
 
         auth = FirebaseAuth.getInstance()
-
         binding.progressBar.visibility = View.VISIBLE
 
         if (auth.currentUser == null) {
@@ -84,7 +94,6 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
         }
 
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
-
         initializePlaces()
 
         val mapFragment = supportFragmentManager
@@ -124,7 +133,6 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
 
             autoCompleteSearch.addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                     if (!s.isNullOrEmpty()) {
                         clearSearch.visibility = View.VISIBLE
@@ -133,7 +141,6 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                         clearSearch.visibility = View.GONE
                     }
                 }
-
                 override fun afterTextChanged(s: Editable?) {}
             })
 
@@ -164,10 +171,14 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
             fabMapType.setOnClickListener { showMapTypeDialog() }
             fabClearMarkers.setOnClickListener { clearAllSafetyCircles() }
             fabZoomIn.setOnClickListener {
-                map.animateCamera(CameraUpdateFactory.zoomIn())
+                if (::map.isInitialized) {
+                    map.animateCamera(CameraUpdateFactory.zoomIn())
+                }
             }
             fabZoomOut.setOnClickListener {
-                map.animateCamera(CameraUpdateFactory.zoomOut())
+                if (::map.isInitialized) {
+                    map.animateCamera(CameraUpdateFactory.zoomOut())
+                }
             }
             fabShowReports.setOnClickListener { showReportsBottomSheet() }
             fabRefresh.setOnClickListener { refreshReports() }
@@ -176,7 +187,14 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
 
     private fun setupObservers() {
         viewModel.reports.observe(this) { reports ->
-            updateMapWithReports(reports)
+            if (::map.isInitialized) {
+                updateMapWithReportsSmartly(reports)
+                pendingReports = null
+            } else {
+                // Store reports to apply when map is ready
+                pendingReports = reports
+                Log.d(TAG, "Map not ready, storing ${reports.size} pending reports")
+            }
         }
 
         viewModel.loading.observe(this) { isLoading ->
@@ -194,6 +212,33 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
             if (success) {
                 Toast.makeText(this, "Report submitted successfully!", Toast.LENGTH_SHORT).show()
                 viewModel.resetSubmitSuccess()
+            }
+        }
+
+        viewModel.focusedReportId.observe(this) { reportId ->
+            focusedReportId = reportId
+            if (::map.isInitialized) {
+                updateCircleVisibility()
+
+                // Move camera to focused report
+                reportId?.let { id ->
+                    reportMarkers[id]?.let { marker ->
+                        map.animateCamera(CameraUpdateFactory.newLatLngZoom(marker.position, 15f))
+                    }
+                }
+            }
+        }
+
+        viewModel.centerLocation.observe(this) { location ->
+            centerLocation = location
+            if (::map.isInitialized && location != null) {
+                map.animateCamera(CameraUpdateFactory.newLatLngZoom(location, 14f))
+            }
+        }
+
+        viewModel.mapType.observe(this) { type ->
+            if (::map.isInitialized && type != null) {
+                map.mapType = type
             }
         }
     }
@@ -233,18 +278,41 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
             getAddressFromLocation(latLng)
         }
 
+        map.setOnMarkerClickListener { marker ->
+            val reportId = marker.tag as? String
+            if (reportId != null) {
+                focusOnReport(reportId)
+                true
+            } else {
+                false
+            }
+        }
+
         map.setOnCameraIdleListener {
             val center = map.cameraPosition.target
             val zoom = map.cameraPosition.zoom
 
             if (zoom >= 10f) {
-                val radiusKm = when {
-                    zoom >= 15f -> 5.0
-                    zoom >= 12f -> 20.0
-                    else -> 50.0
-                }
+                val radiusKm = 100.0
                 viewModel.loadNearbyReports(center.latitude, center.longitude, radiusKm)
             }
+        }
+
+        // Apply pending reports if any
+        pendingReports?.let { reports ->
+            Log.d(TAG, "Map ready, applying ${reports.size} pending reports")
+            updateMapWithReportsSmartly(reports)
+            pendingReports = null
+        }
+
+        // Apply pending map type if any
+        viewModel.mapType.value?.let { type ->
+            map.mapType = type
+        }
+
+        // Apply pending center location if any
+        viewModel.centerLocation.value?.let { location ->
+            map.animateCamera(CameraUpdateFactory.newLatLngZoom(location, 14f))
         }
     }
 
@@ -280,7 +348,9 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 Manifest.permission.ACCESS_FINE_LOCATION
             ) == PackageManager.PERMISSION_GRANTED
         ) {
-            map.isMyLocationEnabled = true
+            if (::map.isInitialized) {
+                map.isMyLocationEnabled = true
+            }
         }
     }
 
@@ -294,7 +364,6 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
         }
 
         binding.progressBar.visibility = View.VISIBLE
-
         locationCancellationToken?.cancel()
         locationCancellationToken = CancellationTokenSource()
 
@@ -307,9 +376,14 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
             if (location != null) {
                 currentLocation = location
                 val currentLatLng = LatLng(location.latitude, location.longitude)
-                map.animateCamera(CameraUpdateFactory.newLatLngZoom(currentLatLng, 14f))
+                centerLocation = currentLatLng
 
-                viewModel.loadNearbyReports(location.latitude, location.longitude)
+                if (::map.isInitialized) {
+                    map.animateCamera(CameraUpdateFactory.newLatLngZoom(currentLatLng, 14f))
+                }
+
+                viewModel.loadNearbyReports(location.latitude, location.longitude, 100.0)
+                viewModel.setCenterLocation(currentLatLng)
                 Toast.makeText(this, "Location found!", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(this, "Cannot get location. Enable GPS.", Toast.LENGTH_SHORT).show()
@@ -361,7 +435,9 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                                 prediction.getPrimaryText(null).toString(),
                                 "Long press to report safety"
                             )
-                            viewModel.loadNearbyReports(latLng.latitude, latLng.longitude)
+                            centerLocation = latLng
+                            viewModel.setCenterLocation(latLng)
+                            viewModel.loadNearbyReports(latLng.latitude, latLng.longitude, 100.0)
                         }
                     }
                 }
@@ -377,7 +453,9 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                         prediction.getPrimaryText(null).toString(),
                         "Long press to report safety"
                     )
-                    viewModel.loadNearbyReports(latLng.latitude, latLng.longitude)
+                    centerLocation = latLng
+                    viewModel.setCenterLocation(latLng)
+                    viewModel.loadNearbyReports(latLng.latitude, latLng.longitude, 100.0)
                 }
             }
 
@@ -401,12 +479,10 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                         val latLng = LatLng(address.latitude, address.longitude)
 
                         runOnUiThread {
-                            updateMarkerAndCamera(
-                                latLng,
-                                query,
-                                address.getAddressLine(0)
-                            )
-                            viewModel.loadNearbyReports(latLng.latitude, latLng.longitude)
+                            updateMarkerAndCamera(latLng, query, address.getAddressLine(0))
+                            centerLocation = latLng
+                            viewModel.loadNearbyReports(latLng.latitude, latLng.longitude, 100.0)
+                            viewModel.setCenterLocation(latLng)
                         }
                     } else {
                         runOnUiThread {
@@ -421,12 +497,10 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                     val address = addresses[0]
                     val latLng = LatLng(address.latitude, address.longitude)
 
-                    updateMarkerAndCamera(
-                        latLng,
-                        query,
-                        address.getAddressLine(0)
-                    )
-                    viewModel.loadNearbyReports(latLng.latitude, latLng.longitude)
+                    updateMarkerAndCamera(latLng, query, address.getAddressLine(0))
+                    centerLocation = latLng
+                    viewModel.setCenterLocation(centerLocation)
+                    viewModel.loadNearbyReports(latLng.latitude, latLng.longitude, 100.0)
                 } else {
                     Toast.makeText(this, "Location not found", Toast.LENGTH_SHORT).show()
                 }
@@ -437,6 +511,8 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     private fun updateMarkerAndCamera(latLng: LatLng, title: String, snippet: String) {
+        if (!::map.isInitialized) return
+
         currentMarker?.remove()
         currentMarker = map.addMarker(
             MarkerOptions()
@@ -445,6 +521,97 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 .snippet(snippet)
         )
         map.animateCamera(CameraUpdateFactory.newLatLngZoom(latLng, 14f))
+    }
+
+    private fun updateMapWithReportsSmartly(reports: List<SafetyReport>) {
+        if (!::map.isInitialized) {
+            Log.w(TAG, "Map not initialized, cannot update reports")
+            return
+        }
+
+        val newReportIds = reports.map { it.id }.toSet()
+        val currentReportIds = reportMarkers.keys.toSet()
+
+        val toRemove = currentReportIds - newReportIds
+        toRemove.forEach { reportId ->
+            reportMarkers[reportId]?.remove()
+            reportCircles[reportId]?.remove()
+            reportMarkers.remove(reportId)
+            reportCircles.remove(reportId)
+        }
+
+        reports.forEach { report ->
+            if (report.id !in currentReportIds) {
+                addReportToMap(report)
+            }
+        }
+
+        updateCircleVisibility()
+
+        Log.d(TAG, "Smart update: ${reports.size} reports, added ${reports.size - currentReportIds.size}, removed ${toRemove.size}")
+    }
+
+    private fun addReportToMap(report: SafetyReport) {
+        if (!::map.isInitialized) {
+            Log.w(TAG, "Attempted to add report to map before map was initialized")
+            return
+        }
+
+        val latLng = LatLng(report.latitude, report.longitude)
+        val safetyLevel = report.getSafetyLevelEnum()
+
+        val circle = map.addCircle(
+            CircleOptions()
+                .center(latLng)
+                .radius(500.0)
+                .strokeWidth(3f)
+                .strokeColor(safetyLevel.color)
+                .fillColor(safetyLevel.colorWithAlpha)
+                .clickable(true)
+                .visible(focusedReportId == null || focusedReportId == report.id)
+        )
+
+        val marker = map.addMarker(
+            MarkerOptions()
+                .position(latLng)
+                .title(safetyLevel.displayName)
+                .snippet(report.comment)
+                .icon(BitmapDescriptorFactory.defaultMarker(
+                    when (safetyLevel) {
+                        SafetyLevel.SAFE -> BitmapDescriptorFactory.HUE_GREEN
+                        SafetyLevel.BE_CAUTIOUS -> BitmapDescriptorFactory.HUE_YELLOW
+                        SafetyLevel.UNSAFE -> BitmapDescriptorFactory.HUE_ORANGE
+                        SafetyLevel.DANGEROUS -> BitmapDescriptorFactory.HUE_RED
+                        else -> BitmapDescriptorFactory.HUE_VIOLET
+                    }
+                ))
+        )
+
+        marker?.tag = report.id
+        reportMarkers[report.id] = marker!!
+        reportCircles[report.id] = circle
+    }
+
+    private fun focusOnReport(reportId: String) {
+        if (!::map.isInitialized) return
+
+        if (focusedReportId == reportId) {
+            focusedReportId = null
+        } else {
+            focusedReportId = reportId
+        }
+        viewModel.setFocusedReport(focusedReportId)
+        updateCircleVisibility()
+
+        reportMarkers[reportId]?.let { marker ->
+            map.animateCamera(CameraUpdateFactory.newLatLngZoom(marker.position, 15f))
+        }
+    }
+
+    private fun updateCircleVisibility() {
+        reportCircles.forEach { (reportId, circle) ->
+            circle.isVisible = focusedReportId == null || focusedReportId == reportId
+        }
     }
 
     private fun showSafetyReportDialog(latLng: LatLng) {
@@ -503,61 +670,45 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
         )
     }
 
-    private fun updateMapWithReports(reports: List<SafetyReport>) {
-        safetyCircles.forEach { it.remove() }
-        safetyCircles.clear()
-
-        reports.forEach { report ->
-            val latLng = LatLng(report.latitude, report.longitude)
-            val safetyLevel = report.getSafetyLevelEnum()
-
-            val circle = map.addCircle(
-                CircleOptions()
-                    .center(latLng)
-                    .radius(500.0) // 500 meters
-                    .strokeWidth(3f)
-                    .strokeColor(safetyLevel.color)
-                    .fillColor(safetyLevel.colorWithAlpha)
-                    .clickable(true)
-            )
-
-            safetyCircles.add(circle)
-
-            map.addMarker(
-                MarkerOptions()
-                    .position(latLng)
-                    .title(safetyLevel.displayName)
-                    .snippet(report.comment)
-                    .icon(BitmapDescriptorFactory.defaultMarker(
-                        when (safetyLevel) {
-                            SafetyLevel.SAFE -> BitmapDescriptorFactory.HUE_GREEN
-                            SafetyLevel.BE_CAUTIOUS -> BitmapDescriptorFactory.HUE_YELLOW
-                            SafetyLevel.UNSAFE -> BitmapDescriptorFactory.HUE_ORANGE
-                            SafetyLevel.DANGEROUS -> BitmapDescriptorFactory.HUE_RED
-                            else -> BitmapDescriptorFactory.HUE_VIOLET
-                        }
-                    ))
-            )
-        }
-
-        Log.d(TAG, "Updated map with ${reports.size} reports")
-    }
-
     private fun showReportsBottomSheet() {
         val bottomSheetDialog = BottomSheetDialog(this)
         val sheetBinding = BottomSheetReportsBinding.inflate(layoutInflater)
 
-        val reports = viewModel.reports.value ?: emptyList()
+        val allReports = viewModel.reports.value ?: emptyList()
+        val sortedReports = sortReports(allReports, currentSortOptions)
+
+        val adapter = SafetyReportAdapter(
+            onUpvoteClick = { report ->
+                Toast.makeText(this, "Upvoted ${report.areaName}", Toast.LENGTH_SHORT).show()
+            },
+            onDownvoteClick = { report ->
+                Toast.makeText(this, "Downvoted ${report.areaName}", Toast.LENGTH_SHORT).show()
+            },
+            onItemClick = { report ->
+                bottomSheetDialog.dismiss()
+                focusOnReport(report.id)
+            }
+        )
 
         with(sheetBinding) {
-            if (reports.isEmpty()) {
+            recyclerViewReports.layoutManager = LinearLayoutManager(this@MapsActivity)
+            recyclerViewReports.adapter = adapter
+
+            if (sortedReports.isEmpty()) {
                 recyclerViewReports.visibility = View.GONE
                 tvNoReports.visibility = View.VISIBLE
             } else {
                 recyclerViewReports.visibility = View.VISIBLE
                 tvNoReports.visibility = View.GONE
+                adapter.updateReports(sortedReports)
+            }
 
-
+            btnSort.setOnClickListener {
+                showSortOptionssDialog { sortOption ->
+                    currentSortOptions = sortOption
+                    val newSorted = sortReports(allReports, sortOption)
+                    adapter.updateReports(newSorted)
+                }
             }
 
             btnClose.setOnClickListener {
@@ -567,6 +718,56 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
 
         bottomSheetDialog.setContentView(sheetBinding.root)
         bottomSheetDialog.show()
+    }
+
+    private fun sortReports(reports: List<SafetyReport>, sortOption: SortOptions): List<SafetyReport> {
+        return when (sortOption) {
+            SortOptions.DANGER_LEVEL_DESC -> reports.sortedByDescending {
+                it.getSafetyLevelEnum().ordinal
+            }.sortedByDescending { it.timestamp }
+
+            SortOptions.DANGER_LEVEL_ASC -> reports.sortedBy {
+                it.getSafetyLevelEnum().ordinal
+            }.sortedByDescending { it.timestamp }
+
+            SortOptions.TIME_NEWEST -> reports.sortedByDescending { it.timestamp }
+            SortOptions.TIME_OLDEST -> reports.sortedBy { it.timestamp }
+
+            SortOptions.VOTES_HIGH -> reports.sortedByDescending {
+                it.upvotes - it.downvotes
+            }
+
+            SortOptions.VOTES_LOW -> reports.sortedBy {
+                it.upvotes - it.downvotes
+            }
+        }
+    }
+
+    private fun showSortOptionssDialog(onSelected: (SortOptions) -> Unit) {
+        val options = arrayOf(
+            "Most Dangerous First",
+            "Safest First",
+            "Newest First",
+            "Oldest First",
+            "Highest Votes",
+            "Lowest Votes"
+        )
+
+        AlertDialog.Builder(this)
+            .setTitle("Sort Reports By")
+            .setItems(options) { _, which ->
+                val sortOption = when (which) {
+                    0 -> SortOptions.DANGER_LEVEL_DESC
+                    1 -> SortOptions.DANGER_LEVEL_ASC
+                    2 -> SortOptions.TIME_NEWEST
+                    3 -> SortOptions.TIME_OLDEST
+                    4 -> SortOptions.VOTES_HIGH
+                    5 -> SortOptions.VOTES_LOW
+                    else -> SortOptions.DANGER_LEVEL_DESC
+                }
+                onSelected(sortOption)
+            }
+            .show()
     }
 
     private fun getAddressFromLocation(latLng: LatLng) {
@@ -628,10 +829,13 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     private fun showMapTypeDialog() {
+        if (!::map.isInitialized) return
+
         val options = arrayOf("Normal", "Satellite", "Terrain", "Hybrid")
         AlertDialog.Builder(this)
             .setTitle("Select Map Type")
             .setItems(options) { _, which ->
+                viewModel.setMapType(which)
                 map.mapType = when (which) {
                     0 -> GoogleMap.MAP_TYPE_NORMAL
                     1 -> GoogleMap.MAP_TYPE_SATELLITE
@@ -644,16 +848,25 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     private fun clearAllSafetyCircles() {
-        safetyCircles.forEach { it.remove() }
-        safetyCircles.clear()
+        reportMarkers.values.forEach { it.remove() }
+        reportCircles.values.forEach { it.remove() }
+        reportMarkers.clear()
+        reportCircles.clear()
+        focusedReportId = null
         currentMarker?.remove()
         currentMarker = null
         Toast.makeText(this, "All safety zones cleared", Toast.LENGTH_SHORT).show()
     }
 
     private fun refreshReports() {
-        val center = map.cameraPosition.target
-        viewModel.loadNearbyReports(center.latitude, center.longitude)
+        if (!::map.isInitialized) {
+            Toast.makeText(this, "Map not ready", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val center = centerLocation ?: map.cameraPosition.target
+        viewModel.loadNearbyReports(center.latitude, center.longitude, 100.0)
+        viewModel.forceRefresh(center.latitude, center.longitude)
         Toast.makeText(this, "Refreshing reports...", Toast.LENGTH_SHORT).show()
     }
 

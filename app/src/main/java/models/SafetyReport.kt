@@ -1,9 +1,9 @@
 package models
 
-
 import com.google.firebase.firestore.DocumentId
 import com.google.firebase.firestore.ServerTimestamp
-import java.util.Date
+import java.text.SimpleDateFormat
+import java.util.*
 
 data class SafetyReport(
     @DocumentId
@@ -11,33 +11,41 @@ data class SafetyReport(
     val latitude: Double = 0.0,
     val longitude: Double = 0.0,
     val areaName: String = "",
-    val safetyLevel: String = SafetyLevel.UNKNOWN.name,
+    val safetyLevel: String = "",
     val comment: String = "",
     val userId: String = "",
-    val userName: String = "Anonymous",
-    @ServerTimestamp
-    val timestamp: Date? = null,
+    val userName: String = "Anonymous User",
     val upvotes: Int = 0,
     val downvotes: Int = 0,
-    val geohash: String = ""
+    val geohash: String = "",
+    @ServerTimestamp
+    val timestamp: Date? = null
 ) {
     fun getSafetyLevelEnum(): SafetyLevel {
-        return SafetyLevel.fromString(safetyLevel)
+        return try {
+            SafetyLevel.valueOf(safetyLevel)
+        } catch (e: IllegalArgumentException) {
+            SafetyLevel.UNKNOWN
+        }
     }
 
     fun getFormattedDate(): String {
-        timestamp?.let {
-            val diff = System.currentTimeMillis() - it.time
-            val days = diff / (1000 * 60 * 60 * 24)
-            return when {
-                days == 0L -> "Today"
-                days == 1L -> "Yesterday"
-                days < 7 -> "$days days ago"
-                days < 30 -> "${days / 7} weeks ago"
-                else -> "${days / 30} months ago"
+        return if (timestamp != null) {
+            val now = Date()
+            val diff = now.time - timestamp.time
+
+            when {
+                diff < 60_000 -> "Just now"
+                diff < 3_600_000 -> "${diff / 60_000}m ago"
+                diff < 86_400_000 -> "${diff / 3_600_000}h ago"
+                diff < 604_800_000 -> "${diff / 86_400_000}d ago"
+                else -> {
+                    val formatter = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
+                    formatter.format(timestamp)
+                }
             }
+        } else {
+            "Unknown"
         }
-        return "Unknown"
     }
 }
-

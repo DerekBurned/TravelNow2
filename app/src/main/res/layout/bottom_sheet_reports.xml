@@ -23,6 +23,16 @@
             android:textStyle="bold"/>
 
         <Button
+            android:id="@+id/btnSort"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Sort"
+            android:drawableLeft="@android:drawable/ic_menu_sort_by_size"
+            android:drawablePadding="8dp"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_marginEnd="8dp"/>
+
+        <Button
             android:id="@+id/btnClose"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -36,6 +46,17 @@
         android:layout_height="1dp"
         android:background="#E0E0E0"
         android:layout_marginBottom="16dp"/>
+
+    <!-- Sort Info -->
+    <TextView
+        android:id="@+id/tvSortInfo"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Sorted by: Most Dangerous First"
+        android:textSize="12sp"
+        android:textColor="#666666"
+        android:paddingBottom="8dp"
+        android:paddingStart="4dp"/>
 
     <!-- No Reports Message -->
     <LinearLayout
