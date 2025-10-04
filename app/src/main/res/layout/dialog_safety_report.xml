@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="20dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="How safe is this area?"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="16dp"/>
+
+    <GridLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:columnCount="2"
+        android:rowCount="2"
+        android:layout_marginBottom="16dp">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnSafe"
+            android:layout_width="0dp"
+            android:layout_height="80dp"
+            android:layout_columnWeight="1"
+            android:layout_margin="4dp"
+            android:text="✓ Safe"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            app:backgroundTint="#4CAF50"
+            app:cornerRadius="12dp"
+            app:icon="@android:drawable/ic_menu_compass"
+            app:iconGravity="top"/>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnCautious"
+            android:layout_width="0dp"
+            android:layout_height="80dp"
+            android:layout_columnWeight="1"
+            android:layout_margin="4dp"
+            android:text="⚠ Be Cautious"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            app:backgroundTint="#FFC107"
+            app:cornerRadius="12dp"
+            app:icon="@android:drawable/ic_dialog_alert"
+            app:iconGravity="top"/>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnUnsafe"
+            android:layout_width="0dp"
+            android:layout_height="80dp"
+            android:layout_columnWeight="1"
+            android:layout_margin="4dp"
+            android:text="⚡ Unsafe"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            app:backgroundTint="#FF9800"
+            app:cornerRadius="12dp"
+            app:icon="@android:drawable/ic_dialog_info"
+            app:iconGravity="top"/>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnDangerous"
+            android:layout_width="0dp"
+            android:layout_height="80dp"
+            android:layout_columnWeight="1"
+            android:layout_margin="4dp"
+            android:text="✕ Dangerous"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            app:backgroundTint="#F44336"
+            app:cornerRadius="12dp"
+            app:icon="@android:drawable/ic_delete"
+            app:iconGravity="top"/>
+    </GridLayout>
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Tell others why (required)"
+        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+        android:layout_marginBottom="16dp">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/etComment"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="100dp"
+            android:gravity="top|start"
+            android:inputType="textMultiLine|textCapSentences"
+            android:maxLines="5"
+            android:maxLength="500"/>
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="💡 Be specific: mention time of day, what you saw, etc."
+        android:textSize="12sp"
+        android:textColor="#666666"
+        android:layout_marginBottom="16dp"/>
+
+    <Button
+        android:id="@+id/btnCancel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Cancel"
+        style="@style/Widget.Material3.Button.OutlinedButton"/>
+
+</LinearLayout>
