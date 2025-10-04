@@ -43,6 +43,7 @@ import com.google.firebase.auth.FirebaseAuth
 import java.util.Locale
 
 class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
+
     private lateinit var binding: ActivityMapsBinding
     private lateinit var map: GoogleMap
     private lateinit var fusedLocationClient: FusedLocationProviderClient
@@ -61,56 +62,76 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
     private val predictions = mutableListOf<AutocompletePrediction>()
     private var locationCancellationToken: CancellationTokenSource? = null
 
-    // Store pending reports until map is ready
     private var pendingReports: List<SafetyReport>? = null
+    private var currentSortOptions = SortOptions.DANGER_LEVEL_DESC
 
     private val viewModel by lazy {
         (application as MyApplication).safetyViewModel
     }
 
-    private var currentSortOptions = SortOptions.DANGER_LEVEL_DESC
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            enableMyLocation()
+            getCurrentLocation()
+        } else {
+            showToast("Location permission denied. Some features will be unavailable.")
+            binding.fabMyLocation.isEnabled = false
+        }
+    }
+
+    companion object {
+        private const val TAG = "MapsActivity"
+        private const val DEFAULT_RADIUS_KM = 100.0
+        private const val DEFAULT_ZOOM_LEVEL = 14f
+        private const val FOCUSED_ZOOM_LEVEL = 15f
+        private const val MIN_ZOOM_FOR_REPORTS = 10f
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMapsBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        initializeComponents()
+        setupMap()
+        setupUI()
+        setupObservers()
+    }
+
+    private fun initializeComponents() {
         auth = FirebaseAuth.getInstance()
+        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+        initializePlaces()
+        handleAuthentication()
+    }
+
+    private fun handleAuthentication() {
         binding.progressBar.visibility = View.VISIBLE
 
         if (auth.currentUser == null) {
             auth.signInAnonymously()
                 .addOnSuccessListener {
                     Log.d(TAG, "Signed in anonymously")
-                    binding.progressBar.visibility = View.GONE
+                    hideProgressBar()
                 }
                 .addOnFailureListener { e ->
                     Log.e(TAG, "Anonymous sign-in failed", e)
-                    Toast.makeText(this, "Authentication failed: ${e.message}", Toast.LENGTH_LONG).show()
-                    binding.progressBar.visibility = View.GONE
+                    showToast("Authentication failed: ${e.message}")
+                    hideProgressBar()
                 }
         } else {
-            binding.progressBar.visibility = View.GONE
+            hideProgressBar()
         }
-
-        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
-        initializePlaces()
-
-        val mapFragment = supportFragmentManager
-            .findFragmentById(R.id.map) as? SupportMapFragment
-        mapFragment?.getMapAsync(this)
-
-        setupUI()
-        setupObservers()
     }
 
     private fun initializePlaces() {
         try {
-            val appInfo = packageManager.getApplicationInfo(
+            val apiKey = packageManager.getApplicationInfo(
                 packageName,
                 PackageManager.GET_META_DATA
-            )
-            val apiKey = appInfo.metaData.getString("com.google.android.geo.API_KEY")
+            ).metaData.getString("com.google.android.geo.API_KEY")
 
             if (!Places.isInitialized() && apiKey != null) {
                 Places.initializeWithNewPlacesApiEnabled(applicationContext, apiKey)
@@ -122,67 +143,85 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
         }
     }
 
+    private fun setupMap() {
+        (supportFragmentManager.findFragmentById(R.id.map) as? SupportMapFragment)?.getMapAsync(this)
+    }
+
     private fun setupUI() {
-        with(binding) {
-            val adapter = ArrayAdapter<String>(
-                this@MapsActivity,
-                android.R.layout.simple_dropdown_item_1line
-            )
-            autoCompleteSearch.setAdapter(adapter)
-            autoCompleteSearch.threshold = 1
+        setupSearchView()
+        setupFloatingActionButtons()
+    }
 
-            autoCompleteSearch.addTextChangedListener(object : TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                    if (!s.isNullOrEmpty()) {
-                        clearSearch.visibility = View.VISIBLE
-                        getPlacePredictions(s.toString(), adapter)
-                    } else {
-                        clearSearch.visibility = View.GONE
-                    }
-                }
-                override fun afterTextChanged(s: Editable?) {}
-            })
+    private fun setupSearchView() {
+        val adapter = ArrayAdapter<String>(
+            this,
+            android.R.layout.simple_dropdown_item_1line
+        )
 
-            autoCompleteSearch.setOnItemClickListener { _, _, position, _ ->
+        with(binding.autoCompleteSearch) {
+            setAdapter(adapter)
+            threshold = 1
+
+            addTextChangedListener(createSearchTextWatcher(adapter))
+
+            setOnItemClickListener { _, _, position, _ ->
                 predictions.getOrNull(position)?.let { prediction ->
                     getPlaceDetails(prediction)
                 }
-                autoCompleteSearch.clearFocus()
+                clearFocus()
             }
 
-            autoCompleteSearch.setOnEditorActionListener { v, actionId, _ ->
+            setOnEditorActionListener { v, actionId, _ ->
                 if (actionId == EditorInfo.IME_ACTION_SEARCH) {
-                    val query = v.text.toString()
-                    if (query.isNotEmpty()) {
+                    v.text?.toString()?.takeIf { it.isNotEmpty() }?.let { query ->
                         searchLocation(query)
                     }
-                    autoCompleteSearch.clearFocus()
+                    clearFocus()
                     true
                 } else false
             }
+        }
 
-            clearSearch.setOnClickListener {
-                autoCompleteSearch.text.clear()
-                clearSearch.visibility = View.GONE
+        binding.clearSearch.setOnClickListener {
+            binding.autoCompleteSearch.text.clear()
+            it.visibility = View.GONE
+        }
+    }
+
+    private fun createSearchTextWatcher(adapter: ArrayAdapter<String>): TextWatcher {
+        return object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                binding.clearSearch.visibility = if (s.isNullOrEmpty()) View.GONE else View.VISIBLE
+
+                s?.toString()?.takeIf { it.isNotEmpty() }?.let { query ->
+                    getPlacePredictions(query, adapter)
+                }
             }
 
+            override fun afterTextChanged(s: Editable?) {}
+        }
+    }
+
+    private fun setupFloatingActionButtons() {
+        with(binding) {
             fabMyLocation.setOnClickListener { getCurrentLocation() }
             fabMapType.setOnClickListener { showMapTypeDialog() }
             fabClearMarkers.setOnClickListener { clearAllSafetyCircles() }
-            fabZoomIn.setOnClickListener {
-                if (::map.isInitialized) {
-                    map.animateCamera(CameraUpdateFactory.zoomIn())
-                }
-            }
-            fabZoomOut.setOnClickListener {
-                if (::map.isInitialized) {
-                    map.animateCamera(CameraUpdateFactory.zoomOut())
-                }
-            }
+            fabZoomIn.setOnClickListener { zoomMap(true) }
+            fabZoomOut.setOnClickListener { zoomMap(false) }
             fabShowReports.setOnClickListener { showReportsBottomSheet() }
             fabRefresh.setOnClickListener { refreshReports() }
         }
+    }
+
+    private fun zoomMap(zoomIn: Boolean) {
+        if (!::map.isInitialized) return
+
+        map.animateCamera(
+            CameraUpdateFactory.zoomBy(if (zoomIn) 1f else -1f)
+        )
     }
 
     private fun setupObservers() {
@@ -191,7 +230,6 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 updateMapWithReportsSmartly(reports)
                 pendingReports = null
             } else {
-                // Store reports to apply when map is ready
                 pendingReports = reports
                 Log.d(TAG, "Map not ready, storing ${reports.size} pending reports")
             }
@@ -203,14 +241,14 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
 
         viewModel.error.observe(this) { error ->
             error?.let {
-                Toast.makeText(this, "Error: $it", Toast.LENGTH_LONG).show()
+                showToast("Error: $it")
                 viewModel.clearError()
             }
         }
 
         viewModel.submitSuccess.observe(this) { success ->
             if (success) {
-                Toast.makeText(this, "Report submitted successfully!", Toast.LENGTH_SHORT).show()
+                showToast("Report submitted successfully!")
                 viewModel.resetSubmitSuccess()
             }
         }
@@ -219,20 +257,14 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
             focusedReportId = reportId
             if (::map.isInitialized) {
                 updateCircleVisibility()
-
-                // Move camera to focused report
-                reportId?.let { id ->
-                    reportMarkers[id]?.let { marker ->
-                        map.animateCamera(CameraUpdateFactory.newLatLngZoom(marker.position, 15f))
-                    }
-                }
+                reportId?.let { focusOnReportMarker(it) }
             }
         }
 
         viewModel.centerLocation.observe(this) { location ->
             centerLocation = location
             if (::map.isInitialized && location != null) {
-                map.animateCamera(CameraUpdateFactory.newLatLngZoom(location, 14f))
+                map.animateCamera(CameraUpdateFactory.newLatLngZoom(location, DEFAULT_ZOOM_LEVEL))
             }
         }
 
@@ -245,152 +277,223 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
 
     override fun onMapReady(googleMap: GoogleMap) {
         map = googleMap
-
-        map.mapType = GoogleMap.MAP_TYPE_NORMAL
-        map.uiSettings.apply {
-            isZoomControlsEnabled = false
-            isCompassEnabled = true
-            isMyLocationButtonEnabled = false
-            isMapToolbarEnabled = true
-            isZoomGesturesEnabled = true
-            isScrollGesturesEnabled = true
-            isTiltGesturesEnabled = true
-            isRotateGesturesEnabled = true
-        }
-
+        configureMapSettings()
+        setupMapListeners()
         checkLocationPermission()
+        applyPendingData()
+    }
 
-        map.setOnMapLongClickListener { latLng ->
-            showSafetyReportDialog(latLng)
-            Log.d("Long Press", "Map was long pressed")
-        }
-
-        map.setOnMapClickListener { latLng ->
-            currentMarker?.remove()
-            currentMarker = map.addMarker(
-                MarkerOptions()
-                    .position(latLng)
-                    .title("Selected Location")
-                    .snippet("Long press to report safety status")
-                    .draggable(true)
-            )
-            map.animateCamera(CameraUpdateFactory.newLatLngZoom(latLng, 15f))
-            getAddressFromLocation(latLng)
-        }
-
-        map.setOnMarkerClickListener { marker ->
-            val reportId = marker.tag as? String
-            if (reportId != null) {
-                focusOnReport(reportId)
-                true
-            } else {
-                false
+    private fun configureMapSettings() {
+        with(map) {
+            mapType = GoogleMap.MAP_TYPE_NORMAL
+            uiSettings.apply {
+                isZoomControlsEnabled = false
+                isCompassEnabled = true
+                isMyLocationButtonEnabled = false
+                isMapToolbarEnabled = true
+                isZoomGesturesEnabled = true
+                isScrollGesturesEnabled = true
+                isTiltGesturesEnabled = true
+                isRotateGesturesEnabled = true
             }
         }
+    }
 
-        map.setOnCameraIdleListener {
-            val center = map.cameraPosition.target
-            val zoom = map.cameraPosition.zoom
+    private fun setupMapListeners() {
+        map.apply {
+            setOnMapLongClickListener { latLng ->
+                showSafetyReportDialog(latLng)
+                Log.d(TAG, "Map long pressed at $latLng")
+            }
 
-            if (zoom >= 10f) {
-                val radiusKm = 100.0
-                viewModel.loadNearbyReports(center.latitude, center.longitude, radiusKm)
+            setOnMapClickListener { latLng ->
+                handleMapClick(latLng)
+            }
+
+            setOnMarkerClickListener { marker ->
+                (marker.tag as? String)?.let { reportId ->
+                    focusOnReport(reportId)
+                    true
+                } ?: false
+            }
+
+            setOnCameraIdleListener {
+                handleCameraIdle()
             }
         }
+    }
 
-        // Apply pending reports if any
+    private fun handleMapClick(latLng: LatLng) {
+        currentMarker?.remove()
+        currentMarker = map.addMarker(
+            MarkerOptions()
+                .position(latLng)
+                .title("Selected Location")
+                .snippet("Long press to report safety status")
+                .draggable(true)
+        )
+        map.animateCamera(CameraUpdateFactory.newLatLngZoom(latLng, FOCUSED_ZOOM_LEVEL))
+        getAddressFromLocation(latLng)
+    }
+
+    private fun handleCameraIdle() {
+        val center = map.cameraPosition.target
+        val zoom = map.cameraPosition.zoom
+
+        if (zoom >= MIN_ZOOM_FOR_REPORTS) {
+            viewModel.loadNearbyReports(center.latitude, center.longitude, DEFAULT_RADIUS_KM)
+        }
+    }
+
+    private fun applyPendingData() {
         pendingReports?.let { reports ->
-            Log.d(TAG, "Map ready, applying ${reports.size} pending reports")
+            Log.d(TAG, "Applying ${reports.size} pending reports")
             updateMapWithReportsSmartly(reports)
             pendingReports = null
         }
 
-        // Apply pending map type if any
         viewModel.mapType.value?.let { type ->
             map.mapType = type
         }
 
-        // Apply pending center location if any
         viewModel.centerLocation.value?.let { location ->
-            map.animateCamera(CameraUpdateFactory.newLatLngZoom(location, 14f))
-        }
-    }
-
-    private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            enableMyLocation()
-            getCurrentLocation()
-        } else {
-            Toast.makeText(this, "Location permission denied", Toast.LENGTH_SHORT).show()
+            map.animateCamera(CameraUpdateFactory.newLatLngZoom(location, DEFAULT_ZOOM_LEVEL))
         }
     }
 
     private fun checkLocationPermission() {
         when {
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED -> {
+            hasFineLocationPermission() -> {
                 enableMyLocation()
                 getCurrentLocation()
             }
             else -> {
-                requestPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                requestLocationPermission()
             }
         }
     }
 
+    private fun hasFineLocationPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
     private fun enableMyLocation() {
-        if (ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
-            if (::map.isInitialized) {
+        try {
+            if (hasFineLocationPermission() && ::map.isInitialized) {
                 map.isMyLocationEnabled = true
             }
+        } catch (securityException: SecurityException) {
+            Log.e(TAG, "SecurityException when enabling my location: ${securityException.message}")
+            handleSecurityException(securityException)
         }
     }
 
     private fun getCurrentLocation() {
-        if (ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            return
+        when {
+            hasFineLocationPermission() -> {
+                requestCurrentLocation()
+            }
+            else -> {
+                requestLocationPermission()
+            }
         }
+    }
 
-        binding.progressBar.visibility = View.VISIBLE
+    private fun requestCurrentLocation() {
+        showProgressBar()
         locationCancellationToken?.cancel()
         locationCancellationToken = CancellationTokenSource()
 
-        fusedLocationClient.getCurrentLocation(
-            Priority.PRIORITY_HIGH_ACCURACY,
-            locationCancellationToken!!.token
-        ).addOnSuccessListener { location: Location? ->
-            binding.progressBar.visibility = View.GONE
-
-            if (location != null) {
-                currentLocation = location
-                val currentLatLng = LatLng(location.latitude, location.longitude)
-                centerLocation = currentLatLng
-
-                if (::map.isInitialized) {
-                    map.animateCamera(CameraUpdateFactory.newLatLngZoom(currentLatLng, 14f))
-                }
-
-                viewModel.loadNearbyReports(location.latitude, location.longitude, 100.0)
-                viewModel.setCenterLocation(currentLatLng)
-                Toast.makeText(this, "Location found!", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(this, "Cannot get location. Enable GPS.", Toast.LENGTH_SHORT).show()
+        try {
+            fusedLocationClient.getCurrentLocation(
+                Priority.PRIORITY_HIGH_ACCURACY,
+                locationCancellationToken!!.token
+            ).addOnSuccessListener { location: Location? ->
+                hideProgressBar()
+                handleLocationResult(location)
+            }.addOnFailureListener { exception ->
+                hideProgressBar()
+                handleLocationError(exception)
+            }.addOnCanceledListener {
+                hideProgressBar()
+                showToast("Location request cancelled")
             }
-        }.addOnFailureListener { exception ->
-            binding.progressBar.visibility = View.GONE
-            Toast.makeText(this, "Failed: ${exception.message}", Toast.LENGTH_SHORT).show()
+        } catch (securityException: SecurityException) {
+            hideProgressBar()
+            handleSecurityException(securityException)
+        }
+    }
+
+    private fun handleLocationResult(location: Location?) {
+        if (location != null) {
+            currentLocation = location
+            val currentLatLng = LatLng(location.latitude, location.longitude)
+            centerLocation = currentLatLng
+
+            if (::map.isInitialized) {
+                map.animateCamera(CameraUpdateFactory.newLatLngZoom(currentLatLng, DEFAULT_ZOOM_LEVEL))
+            }
+
+            viewModel.loadNearbyReports(location.latitude, location.longitude, DEFAULT_RADIUS_KM)
+            viewModel.setCenterLocation(currentLatLng)
+            showToast("Location found!")
+        } else {
+            showToast("Cannot get current location. Please ensure location services are enabled.")
+            getLastKnownLocation()
+        }
+    }
+
+    private fun getLastKnownLocation() {
+        try {
+            if (hasFineLocationPermission()) {
+                fusedLocationClient.lastLocation
+                    .addOnSuccessListener { location: Location? ->
+                        location?.let {
+                            handleLocationResult(it)
+                        } ?: showToast("No last known location available")
+                    }
+                    .addOnFailureListener { exception ->
+                        Log.e(TAG, "Last known location error: ${exception.message}")
+                        showToast("Unable to retrieve location")
+                    }
+            }
+        } catch (securityException: SecurityException) {
+            handleSecurityException(securityException)
+        }
+    }
+
+    private fun handleLocationError(exception: Exception) {
+        Log.e(TAG, "Location request failed: ${exception.message}", exception)
+
+        when (exception) {
+            is SecurityException -> handleSecurityException(exception)
+            else -> showToast("Location error: ${exception.localizedMessage ?: "Unknown error"}")
+        }
+    }
+
+    private fun handleSecurityException(securityException: SecurityException) {
+        Log.e(TAG, "Location permission revoked or not granted: ${securityException.message}")
+        showToast("Location permission denied. Please grant permission in app settings.")
+    }
+
+    private fun requestLocationPermission() {
+        if (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION)) {
+            AlertDialog.Builder(this)
+                .setTitle("Location Permission Required")
+                .setMessage("This app needs location permission to show your current location and nearby safety reports.")
+                .setPositiveButton("Grant") { _, _ ->
+                    requestPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                }
+                .setNegativeButton("Deny") { dialog, _ ->
+                    dialog.dismiss()
+                    showToast("Location features will be limited")
+                }
+                .show()
+        } else {
+            requestPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
         }
     }
 
@@ -405,12 +508,12 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 predictions.clear()
                 predictions.addAll(response.autocompletePredictions)
 
-                val suggestionsList = response.autocompletePredictions.map {
+                val suggestions = response.autocompletePredictions.map {
                     it.getFullText(null).toString()
                 }
 
                 adapter.clear()
-                adapter.addAll(suggestionsList)
+                adapter.addAll(suggestions)
                 adapter.notifyDataSetChanged()
             }
             .addOnFailureListener { exception ->
@@ -420,24 +523,49 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
 
     private fun getPlaceDetails(prediction: AutocompletePrediction) {
         try {
-            val geocoder = Geocoder(this, Locale.getDefault())
             val locationName = prediction.getFullText(null).toString()
+            geocodeLocationName(locationName) { latLng ->
+                updateMarkerAndCamera(
+                    latLng,
+                    prediction.getPrimaryText(null).toString(),
+                    "Long press to report safety"
+                )
+                centerLocation = latLng
+                viewModel.setCenterLocation(latLng)
+                viewModel.loadNearbyReports(latLng.latitude, latLng.longitude, DEFAULT_RADIUS_KM)
+            }
+            sessionToken = AutocompleteSessionToken.newInstance()
+            predictions.clear()
+            binding.autoCompleteSearch.text.clear()
+        } catch (e: Exception) {
+            Log.e(TAG, "Place details error: ${e.message}")
+            showToast("Could not get place details")
+        }
+    }
+
+    private fun searchLocation(query: String) {
+        geocodeLocationName(query) { latLng ->
+            updateMarkerAndCamera(latLng, query, "Searched location")
+            centerLocation = latLng
+            viewModel.loadNearbyReports(latLng.latitude, latLng.longitude, DEFAULT_RADIUS_KM)
+            viewModel.setCenterLocation(latLng)
+        }
+    }
+
+    private fun geocodeLocationName(locationName: String, onSuccess: (LatLng) -> Unit) {
+        try {
+            val geocoder = Geocoder(this, Locale.getDefault())
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 geocoder.getFromLocationName(locationName, 1) { addresses ->
                     if (addresses.isNotEmpty()) {
                         val address = addresses[0]
-                        val latLng = LatLng(address.latitude, address.longitude)
-
                         runOnUiThread {
-                            updateMarkerAndCamera(
-                                latLng,
-                                prediction.getPrimaryText(null).toString(),
-                                "Long press to report safety"
-                            )
-                            centerLocation = latLng
-                            viewModel.setCenterLocation(latLng)
-                            viewModel.loadNearbyReports(latLng.latitude, latLng.longitude, 100.0)
+                            onSuccess(LatLng(address.latitude, address.longitude))
+                        }
+                    } else {
+                        runOnUiThread {
+                            showToast("Location not found")
                         }
                     }
                 }
@@ -446,67 +574,13 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 val addresses = geocoder.getFromLocationName(locationName, 1)
                 if (addresses != null && addresses.isNotEmpty()) {
                     val address = addresses[0]
-                    val latLng = LatLng(address.latitude, address.longitude)
-
-                    updateMarkerAndCamera(
-                        latLng,
-                        prediction.getPrimaryText(null).toString(),
-                        "Long press to report safety"
-                    )
-                    centerLocation = latLng
-                    viewModel.setCenterLocation(latLng)
-                    viewModel.loadNearbyReports(latLng.latitude, latLng.longitude, 100.0)
-                }
-            }
-
-            sessionToken = AutocompleteSessionToken.newInstance()
-            predictions.clear()
-            binding.autoCompleteSearch.text.clear()
-        } catch (e: Exception) {
-            Log.e(TAG, "Place details error: ${e.message}")
-            Toast.makeText(this, "Could not get place details", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun searchLocation(query: String) {
-        try {
-            val geocoder = Geocoder(this, Locale.getDefault())
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                geocoder.getFromLocationName(query, 1) { addresses ->
-                    if (addresses.isNotEmpty()) {
-                        val address = addresses[0]
-                        val latLng = LatLng(address.latitude, address.longitude)
-
-                        runOnUiThread {
-                            updateMarkerAndCamera(latLng, query, address.getAddressLine(0))
-                            centerLocation = latLng
-                            viewModel.loadNearbyReports(latLng.latitude, latLng.longitude, 100.0)
-                            viewModel.setCenterLocation(latLng)
-                        }
-                    } else {
-                        runOnUiThread {
-                            Toast.makeText(this, "Location not found", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                }
-            } else {
-                @Suppress("DEPRECATION")
-                val addresses = geocoder.getFromLocationName(query, 1)
-                if (addresses != null && addresses.isNotEmpty()) {
-                    val address = addresses[0]
-                    val latLng = LatLng(address.latitude, address.longitude)
-
-                    updateMarkerAndCamera(latLng, query, address.getAddressLine(0))
-                    centerLocation = latLng
-                    viewModel.setCenterLocation(centerLocation)
-                    viewModel.loadNearbyReports(latLng.latitude, latLng.longitude, 100.0)
+                    onSuccess(LatLng(address.latitude, address.longitude))
                 } else {
-                    Toast.makeText(this, "Location not found", Toast.LENGTH_SHORT).show()
+                    showToast("Location not found")
                 }
             }
         } catch (e: Exception) {
-            Toast.makeText(this, "Search error: ${e.message}", Toast.LENGTH_SHORT).show()
+            showToast("Search error: ${e.message}")
         }
     }
 
@@ -520,7 +594,7 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 .title(title)
                 .snippet(snippet)
         )
-        map.animateCamera(CameraUpdateFactory.newLatLngZoom(latLng, 14f))
+        map.animateCamera(CameraUpdateFactory.newLatLngZoom(latLng, DEFAULT_ZOOM_LEVEL))
     }
 
     private fun updateMapWithReportsSmartly(reports: List<SafetyReport>) {
@@ -532,8 +606,7 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
         val newReportIds = reports.map { it.id }.toSet()
         val currentReportIds = reportMarkers.keys.toSet()
 
-        val toRemove = currentReportIds - newReportIds
-        toRemove.forEach { reportId ->
+        (currentReportIds - newReportIds).forEach { reportId ->
             reportMarkers[reportId]?.remove()
             reportCircles[reportId]?.remove()
             reportMarkers.remove(reportId)
@@ -547,15 +620,11 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
         }
 
         updateCircleVisibility()
-
-        Log.d(TAG, "Smart update: ${reports.size} reports, added ${reports.size - currentReportIds.size}, removed ${toRemove.size}")
+        Log.d(TAG, "Smart update: ${reports.size} reports, added ${reports.size - currentReportIds.size}, removed ${currentReportIds.size - newReportIds.size}")
     }
 
     private fun addReportToMap(report: SafetyReport) {
-        if (!::map.isInitialized) {
-            Log.w(TAG, "Attempted to add report to map before map was initialized")
-            return
-        }
+        if (!::map.isInitialized) return
 
         val latLng = LatLng(report.latitude, report.longitude)
         val safetyLevel = report.getSafetyLevelEnum()
@@ -576,35 +645,39 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 .position(latLng)
                 .title(safetyLevel.displayName)
                 .snippet(report.comment)
-                .icon(BitmapDescriptorFactory.defaultMarker(
-                    when (safetyLevel) {
-                        SafetyLevel.SAFE -> BitmapDescriptorFactory.HUE_GREEN
-                        SafetyLevel.BE_CAUTIOUS -> BitmapDescriptorFactory.HUE_YELLOW
-                        SafetyLevel.UNSAFE -> BitmapDescriptorFactory.HUE_ORANGE
-                        SafetyLevel.DANGEROUS -> BitmapDescriptorFactory.HUE_RED
-                        else -> BitmapDescriptorFactory.HUE_VIOLET
-                    }
-                ))
+                .icon(getMarkerIconForSafetyLevel(safetyLevel))
         )
 
         marker?.tag = report.id
-        reportMarkers[report.id] = marker!!
-        reportCircles[report.id] = circle
+        marker?.let {
+            reportMarkers[report.id] = it
+            reportCircles[report.id] = circle
+        }
+    }
+
+    private fun getMarkerIconForSafetyLevel(safetyLevel: SafetyLevel): BitmapDescriptor {
+        val hue = when (safetyLevel) {
+            SafetyLevel.SAFE -> BitmapDescriptorFactory.HUE_GREEN
+            SafetyLevel.BE_CAUTIOUS -> BitmapDescriptorFactory.HUE_YELLOW
+            SafetyLevel.UNSAFE -> BitmapDescriptorFactory.HUE_ORANGE
+            SafetyLevel.DANGEROUS -> BitmapDescriptorFactory.HUE_RED
+            else -> BitmapDescriptorFactory.HUE_VIOLET
+        }
+        return BitmapDescriptorFactory.defaultMarker(hue)
     }
 
     private fun focusOnReport(reportId: String) {
         if (!::map.isInitialized) return
 
-        if (focusedReportId == reportId) {
-            focusedReportId = null
-        } else {
-            focusedReportId = reportId
-        }
+        focusedReportId = if (focusedReportId == reportId) null else reportId
         viewModel.setFocusedReport(focusedReportId)
         updateCircleVisibility()
+        focusOnReportMarker(reportId)
+    }
 
+    private fun focusOnReportMarker(reportId: String) {
         reportMarkers[reportId]?.let { marker ->
-            map.animateCamera(CameraUpdateFactory.newLatLngZoom(marker.position, 15f))
+            map.animateCamera(CameraUpdateFactory.newLatLngZoom(marker.position, FOCUSED_ZOOM_LEVEL))
         }
     }
 
@@ -626,38 +699,38 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
             areaName = address
         }
 
-        with(dialogBinding) {
-            btnSafe.setOnClickListener {
-                submitReport(latLng, areaName, SafetyLevel.SAFE, etComment.text.toString())
-                dialog.dismiss()
-            }
-
-            btnCautious.setOnClickListener {
-                submitReport(latLng, areaName, SafetyLevel.BE_CAUTIOUS, etComment.text.toString())
-                dialog.dismiss()
-            }
-
-            btnUnsafe.setOnClickListener {
-                submitReport(latLng, areaName, SafetyLevel.UNSAFE, etComment.text.toString())
-                dialog.dismiss()
-            }
-
-            btnDangerous.setOnClickListener {
-                submitReport(latLng, areaName, SafetyLevel.DANGEROUS, etComment.text.toString())
-                dialog.dismiss()
-            }
-
-            btnCancel.setOnClickListener {
-                dialog.dismiss()
-            }
-        }
-
+        setupSafetyReportButtons(dialogBinding, dialog, latLng, areaName)
         dialog.show()
+    }
+
+    private fun setupSafetyReportButtons(
+        binding: DialogSafetyReportBinding,
+        dialog: AlertDialog,
+        latLng: LatLng,
+        areaName: String
+    ) {
+        with(binding) {
+            val buttonActions = mapOf(
+                btnSafe to SafetyLevel.SAFE,
+                btnCautious to SafetyLevel.BE_CAUTIOUS,
+                btnUnsafe to SafetyLevel.UNSAFE,
+                btnDangerous to SafetyLevel.DANGEROUS
+            )
+
+            buttonActions.forEach { (button, safetyLevel) ->
+                button.setOnClickListener {
+                    submitReport(latLng, areaName, safetyLevel, etComment.text.toString())
+                    dialog.dismiss()
+                }
+            }
+
+            btnCancel.setOnClickListener { dialog.dismiss() }
+        }
     }
 
     private fun submitReport(latLng: LatLng, areaName: String, level: SafetyLevel, comment: String) {
         if (comment.isBlank()) {
-            Toast.makeText(this, "Please add a comment", Toast.LENGTH_SHORT).show()
+            showToast("Please add a comment")
             return
         }
 
@@ -677,73 +750,72 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
         val allReports = viewModel.reports.value ?: emptyList()
         val sortedReports = sortReports(allReports, currentSortOptions)
 
+        setupReportsBottomSheetContent(sheetBinding, sortedReports, bottomSheetDialog)
+        bottomSheetDialog.setContentView(sheetBinding.root)
+        bottomSheetDialog.show()
+    }
+
+    private fun setupReportsBottomSheetContent(
+        binding: BottomSheetReportsBinding,
+        reports: List<SafetyReport>,
+        dialog: BottomSheetDialog
+    ) {
         val adapter = SafetyReportAdapter(
             onUpvoteClick = { report ->
-                Toast.makeText(this, "Upvoted ${report.areaName}", Toast.LENGTH_SHORT).show()
+                showToast("Upvoted ${report.areaName}")
             },
             onDownvoteClick = { report ->
-                Toast.makeText(this, "Downvoted ${report.areaName}", Toast.LENGTH_SHORT).show()
+                showToast("Downvoted ${report.areaName}")
             },
             onItemClick = { report ->
-                bottomSheetDialog.dismiss()
+                dialog.dismiss()
                 focusOnReport(report.id)
             }
         )
 
-        with(sheetBinding) {
+        with(binding) {
             recyclerViewReports.layoutManager = LinearLayoutManager(this@MapsActivity)
             recyclerViewReports.adapter = adapter
 
-            if (sortedReports.isEmpty()) {
+            if (reports.isEmpty()) {
                 recyclerViewReports.visibility = View.GONE
                 tvNoReports.visibility = View.VISIBLE
             } else {
                 recyclerViewReports.visibility = View.VISIBLE
                 tvNoReports.visibility = View.GONE
-                adapter.updateReports(sortedReports)
+                adapter.updateReports(reports)
             }
 
             btnSort.setOnClickListener {
-                showSortOptionssDialog { sortOption ->
+                showSortOptionsDialog { sortOption ->
                     currentSortOptions = sortOption
-                    val newSorted = sortReports(allReports, sortOption)
+                    val newSorted = sortReports(reports, sortOption)
                     adapter.updateReports(newSorted)
                 }
             }
 
-            btnClose.setOnClickListener {
-                bottomSheetDialog.dismiss()
-            }
+            btnClose.setOnClickListener { dialog.dismiss() }
         }
-
-        bottomSheetDialog.setContentView(sheetBinding.root)
-        bottomSheetDialog.show()
     }
 
     private fun sortReports(reports: List<SafetyReport>, sortOption: SortOptions): List<SafetyReport> {
         return when (sortOption) {
-            SortOptions.DANGER_LEVEL_DESC -> reports.sortedByDescending {
-                it.getSafetyLevelEnum().ordinal
-            }.sortedByDescending { it.timestamp }
-
-            SortOptions.DANGER_LEVEL_ASC -> reports.sortedBy {
-                it.getSafetyLevelEnum().ordinal
-            }.sortedByDescending { it.timestamp }
-
+            SortOptions.DANGER_LEVEL_DESC -> reports.sortedWith(
+                compareByDescending<SafetyReport> { it.getSafetyLevelEnum().ordinal }
+                    .thenByDescending { it.timestamp }
+            )
+            SortOptions.DANGER_LEVEL_ASC -> reports.sortedWith(
+                compareBy<SafetyReport> { it.getSafetyLevelEnum().ordinal }
+                    .thenByDescending { it.timestamp }
+            )
             SortOptions.TIME_NEWEST -> reports.sortedByDescending { it.timestamp }
             SortOptions.TIME_OLDEST -> reports.sortedBy { it.timestamp }
-
-            SortOptions.VOTES_HIGH -> reports.sortedByDescending {
-                it.upvotes - it.downvotes
-            }
-
-            SortOptions.VOTES_LOW -> reports.sortedBy {
-                it.upvotes - it.downvotes
-            }
+            SortOptions.VOTES_HIGH -> reports.sortedByDescending { it.upvotes - it.downvotes }
+            SortOptions.VOTES_LOW -> reports.sortedBy { it.upvotes - it.downvotes }
         }
     }
 
-    private fun showSortOptionssDialog(onSelected: (SortOptions) -> Unit) {
+    private fun showSortOptionsDialog(onSelected: (SortOptions) -> Unit) {
         val options = arrayOf(
             "Most Dangerous First",
             "Safest First",
@@ -771,59 +843,36 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     private fun getAddressFromLocation(latLng: LatLng) {
-        try {
-            val geocoder = Geocoder(this, Locale.getDefault())
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                geocoder.getFromLocation(latLng.latitude, latLng.longitude, 1) { addresses ->
-                    if (addresses.isNotEmpty()) {
-                        val address = addresses[0]
-                        val addressText = address.getAddressLine(0)
-                        runOnUiThread {
-                            currentMarker?.snippet = addressText
-                            currentMarker?.showInfoWindow()
-                            Toast.makeText(this, addressText, Toast.LENGTH_LONG).show()
-                        }
-                    }
-                }
-            } else {
-                @Suppress("DEPRECATION")
-                val addresses = geocoder.getFromLocation(latLng.latitude, latLng.longitude, 1)
-                if (addresses != null && addresses.isNotEmpty()) {
-                    val address = addresses[0]
-                    val addressText = address.getAddressLine(0)
-                    currentMarker?.snippet = addressText
-                    currentMarker?.showInfoWindow()
-                    Toast.makeText(this, addressText, Toast.LENGTH_LONG).show()
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Geocoder error: ${e.message}")
+        geocodeLatLng(latLng) { addressText ->
+            currentMarker?.snippet = addressText
+            currentMarker?.showInfoWindow()
+            showToast(addressText, Toast.LENGTH_LONG)
         }
     }
 
     private fun getAddressFromLocationForReport(latLng: LatLng, callback: (String) -> Unit) {
+        geocodeLatLng(latLng) { address ->
+            callback(address)
+        }
+    }
+
+    private fun geocodeLatLng(latLng: LatLng, callback: (String) -> Unit) {
         try {
             val geocoder = Geocoder(this, Locale.getDefault())
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 geocoder.getFromLocation(latLng.latitude, latLng.longitude, 1) { addresses ->
-                    if (addresses.isNotEmpty()) {
-                        callback(addresses[0].getAddressLine(0) ?: "Unknown Location")
-                    } else {
-                        callback("Unknown Location")
-                    }
+                    val addressText = addresses.firstOrNull()?.getAddressLine(0) ?: "Unknown Location"
+                    runOnUiThread { callback(addressText) }
                 }
             } else {
                 @Suppress("DEPRECATION")
                 val addresses = geocoder.getFromLocation(latLng.latitude, latLng.longitude, 1)
-                if (addresses != null && addresses.isNotEmpty()) {
-                    callback(addresses[0].getAddressLine(0) ?: "Unknown Location")
-                } else {
-                    callback("Unknown Location")
-                }
+                val addressText = addresses?.firstOrNull()?.getAddressLine(0) ?: "Unknown Location"
+                callback(addressText)
             }
         } catch (e: Exception) {
+            Log.e(TAG, "Geocoder error: ${e.message}")
             callback("Unknown Location")
         }
     }
@@ -835,14 +884,15 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
         AlertDialog.Builder(this)
             .setTitle("Select Map Type")
             .setItems(options) { _, which ->
-                viewModel.setMapType(which)
-                map.mapType = when (which) {
+                val mapType = when (which) {
                     0 -> GoogleMap.MAP_TYPE_NORMAL
                     1 -> GoogleMap.MAP_TYPE_SATELLITE
                     2 -> GoogleMap.MAP_TYPE_TERRAIN
                     3 -> GoogleMap.MAP_TYPE_HYBRID
                     else -> GoogleMap.MAP_TYPE_NORMAL
                 }
+                viewModel.setMapType(mapType)
+                map.mapType = mapType
             }
             .show()
     }
@@ -855,28 +905,36 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
         focusedReportId = null
         currentMarker?.remove()
         currentMarker = null
-        Toast.makeText(this, "All safety zones cleared", Toast.LENGTH_SHORT).show()
+        showToast("All safety zones cleared")
     }
 
     private fun refreshReports() {
         if (!::map.isInitialized) {
-            Toast.makeText(this, "Map not ready", Toast.LENGTH_SHORT).show()
+            showToast("Map not ready")
             return
         }
 
         val center = centerLocation ?: map.cameraPosition.target
-        viewModel.loadNearbyReports(center.latitude, center.longitude, 100.0)
+        viewModel.loadNearbyReports(center.latitude, center.longitude, DEFAULT_RADIUS_KM)
         viewModel.forceRefresh(center.latitude, center.longitude)
-        Toast.makeText(this, "Refreshing reports...", Toast.LENGTH_SHORT).show()
+        showToast("Refreshing reports...")
+    }
+
+    private fun showProgressBar() {
+        binding.progressBar.visibility = View.VISIBLE
+    }
+
+    private fun hideProgressBar() {
+        binding.progressBar.visibility = View.GONE
+    }
+
+    private fun showToast(message: String, duration: Int = Toast.LENGTH_SHORT) {
+        Toast.makeText(this, message, duration).show()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         locationCancellationToken?.cancel()
         Log.d(TAG, "MapsActivity destroyed")
-    }
-
-    companion object {
-        private const val TAG = "MapsActivity"
     }
 }
