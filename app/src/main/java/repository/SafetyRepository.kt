@@ -14,9 +14,6 @@ class SafetyRepository {
     private val auth = FirebaseAuth.getInstance()
     private val reportsCollection = db.collection("safety_reports")
 
-    /**
-     * Ensure user is authenticated before performing operations
-     */
     private suspend fun ensureAuthenticated(): Boolean {
         return try {
             if (auth.currentUser == null) {
@@ -38,7 +35,8 @@ class SafetyRepository {
         longitude: Double,
         areaName: String,
         safetyLevel: String,
-        comment: String
+        comment: String,
+        radiusMeters: Int = 500
     ): Result<String> {
         return try {
             Log.d("SafetyRepository", "Attempting to submit report...")
@@ -69,6 +67,7 @@ class SafetyRepository {
                 "userName" to "Anonymous User",
                 "upvotes" to 0,
                 "downvotes" to 0,
+                "radiusMeters" to radiusMeters,
                 "geohash" to geohash,
                 "timestamp" to FieldValue.serverTimestamp()
             )
@@ -91,12 +90,10 @@ class SafetyRepository {
         return try {
             Log.d("SafetyRepository", "Fetching nearby reports for lat=$latitude, lon=$longitude, radius=$radiusKm km")
 
-
             val bounds = GeoUtils.getGeohashBounds(latitude, longitude, radiusKm)
             Log.d("SafetyRepository", "Geohash bounds: ${bounds.first} to ${bounds.second}")
 
             val reports = mutableListOf<SafetyReport>()
-
 
             val snapshot = reportsCollection
                 .whereGreaterThanOrEqualTo("geohash", bounds.first)

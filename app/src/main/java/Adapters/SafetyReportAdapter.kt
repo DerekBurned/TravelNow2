@@ -1,7 +1,9 @@
 package com.example.travelnow
 
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
+import android.widget.TextView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
 import com.example.travelnow.databinding.ItemSafetyReportBinding
@@ -32,9 +34,35 @@ class SafetyReportAdapter(
             val voteCount = report.upvotes - report.downvotes
             binding.tvVoteCount.text = voteCount.toString()
 
-            binding.btnUpvote.setOnClickListener { onUpvoteClick(report) }
-            binding.btnDownvote.setOnClickListener { onDownvoteClick(report) }
+            binding.btnUpvote.setOnClickListener { onUpvoteClick(report)
+            if(!binding.btnDownvote.isEnabled){
+                binding.btnDownvote.isEnabled = true
+                binding.btnUpvote.isEnabled = false
+            } else{
+                binding.btnUpvote.isEnabled = false
+            }
+               increaseDecreaseCOunter(binding.tvVoteCount, true)
+
+            }
+            binding.btnDownvote.setOnClickListener { onDownvoteClick(report)
+                if(!binding.btnUpvote.isEnabled){
+                    binding.btnUpvote.isEnabled = true
+                    binding.btnDownvote.isEnabled = false
+                } else{
+                    binding.btnDownvote.isEnabled = false
+                }
+                increaseDecreaseCOunter(binding.tvVoteCount, false)
+
+            }
             binding.root.setOnClickListener { onItemClick(report) }
+        }
+    }
+    private fun increaseDecreaseCOunter(view: TextView, upvote: Boolean){
+        if(upvote) {
+            view.text = view.text.let { (it.toString().toIntOrNull()?.plus(1) ?: 1).toString() }
+        }else{
+            view.text = view.text.let { (it.toString().toIntOrNull()?.minus(1) ?: 1).toString() }
+
         }
     }
 

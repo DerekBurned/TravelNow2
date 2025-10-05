@@ -6,14 +6,16 @@ interface ISafetyRepository {
 
     /**
      * Submits a safety report with the given parameters.
+     * @param radiusMeters The radius in meters that this report covers
      * @return Result containing the ID of the created report or failure
      */
-    suspend fun  submitReport(
+    suspend fun submitReport(
         latitude: Double,
         longitude: Double,
         areaName: String,
         safetyLevel: String,
-        comment: String
+        comment: String,
+        radiusMeters: Int = 500
     ): Result<String>
 
     /**

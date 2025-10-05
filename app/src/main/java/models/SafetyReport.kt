@@ -17,6 +17,7 @@ data class SafetyReport(
     val userName: String = "Anonymous User",
     val upvotes: Int = 0,
     val downvotes: Int = 0,
+    val radiusMeters: Int = 500,
     val geohash: String = "",
     @ServerTimestamp
     val timestamp: Date? = null

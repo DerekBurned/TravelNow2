@@ -45,7 +45,7 @@
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:background="#E0E0E0"
-        android:layout_marginBottom="16dp"/>
+        android:layout_marginBottom="12dp"/>
 
     <!-- Sort Info -->
     <TextView
@@ -55,8 +55,9 @@
         android:text="Sorted by: Most Dangerous First"
         android:textSize="12sp"
         android:textColor="#666666"
-        android:paddingBottom="8dp"
-        android:paddingStart="4dp"/>
+        android:paddingBottom="12dp"
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp"/>
 
     <!-- No Reports Message -->
     <LinearLayout
@@ -72,7 +73,8 @@
             android:layout_height="80dp"
             android:src="@android:drawable/ic_menu_search"
             android:alpha="0.3"
-            android:layout_marginBottom="16dp"/>
+            android:layout_marginBottom="16dp"
+            android:contentDescription="No reports"/>
 
         <TextView
             android:layout_width="wrap_content"

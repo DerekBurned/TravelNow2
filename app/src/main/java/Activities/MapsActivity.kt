@@ -680,8 +680,11 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
         val adapter = SafetyReportAdapter(
             onUpvoteClick = { report ->
                 Toast.makeText(this, "Upvoted ${report.areaName}", Toast.LENGTH_SHORT).show()
+                viewModel.voteOnReport(report.id,true )
             },
             onDownvoteClick = { report ->
+                viewModel.voteOnReport(report.id,false )
+
                 Toast.makeText(this, "Downvoted ${report.areaName}", Toast.LENGTH_SHORT).show()
             },
             onItemClick = { report ->
